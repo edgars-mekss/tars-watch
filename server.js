@@ -392,6 +392,7 @@ if (existsSync(CERT_FILE) && existsSync(KEY_FILE)) {
   https.createServer(tls, handle).listen(HTTPS_PORT, "0.0.0.0", () => {
     for (const ip of lanAddresses()) console.log(`  с телефона:   https://${ip}:${HTTPS_PORT}`);
   });
-} else {
+} else if (LISTEN_HOST !== "127.0.0.1") {
+  // За Caddy (VPS) HTTPS уже есть — подсказка нужна только дома.
   console.log("  для телефона нужен HTTPS: выполните npm run cert и перезапустите сервер");
 }

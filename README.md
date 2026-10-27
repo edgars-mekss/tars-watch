@@ -85,10 +85,21 @@ npm start      # prints https://<your-ip>:3443
 
 Open that address on a phone in the same Wi-Fi network and accept the certificate warning. On an iPhone you can also install the certificate to remove the warning: open `https://<your-ip>:3443/tars.crt`, install the profile, then enable it under *Settings → General → About → Certificate Trust Settings*.
 
+### On a server
+
+The prototype runs on a small VPS (2 cores, Ubuntu 24.04) next to other services:
+
+- a `tars` systemd service under its own user, listening on `127.0.0.1` only, with a 500 MB memory cap;
+- [Caddy](https://caddyserver.com) in front of it with an automatic Let's Encrypt certificate;
+- access by a secret link: `ACCESS_TOKEN` in `.env`, first visit `/?key=…`, then a cookie; a future watch app sends `Authorization: Bearer …`. Without it strangers could burn the free API quota.
+
+Measured over the internet: speech recognition ~0.7 s, model reply ~0.5 s, voice ~1 s.
+
 ## Roadmap
 
 - [x] Demo video
-- [ ] HTTPS, so the prototype runs on a phone over Wi-Fi with the microphone
+- [x] HTTPS, so the prototype runs on a phone over Wi-Fi with the microphone
+- [x] Deployed to a VPS with real HTTPS and access protection
 - [ ] watchOS app in SwiftUI (watchOS 10) with the same face, personality and server
 - [ ] Instant on-device commands (settings, time, status report) that work without a network
 
