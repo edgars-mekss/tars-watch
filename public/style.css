@@ -94,6 +94,7 @@ body {
   overflow: hidden;
   cursor: pointer;
   outline: none;
+  touch-action: manipulation; /* без зума от двойного касания на телефоне */
   box-shadow: 0 0 0 6px #050505;
 }
 .screen:focus-visible { box-shadow: 0 0 0 6px #050505, 0 0 0 10px var(--accent); }

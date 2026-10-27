@@ -4,6 +4,8 @@
 
 > **Status: web prototype, work in progress.** Built with Claude Code. The watchOS (SwiftUI) port comes next.
 
+<p align="center"><a href="docs/tars-demo.mp4"><img src="docs/preview.jpg" width="300" alt="TARS running on an iPhone in the Apple Watch frame"></a><br><sub>▶ <a href="docs/tars-demo.mp4">Demo video (1:40)</a>: switching on, a status report, mission questions, a joke at 60% humor. In Russian.</sub></p>
+
 A small robot character that lives on your wrist. You tap the screen and talk to it. It answers out loud while its glowing eyes show what it is doing: listening, thinking, speaking, or reacting with an emotion.
 
 The robot plays **TARS** from *Interstellar*: a laconic, deadpan military robot. Like in the film, its personality has settings in percent. Say *"TARS, set humor to 60%"* and it confirms, its manner changes, and the new value appears on the watch face.
@@ -17,7 +19,7 @@ Apple Watch apps can only be built in Xcode on a Mac. So the design, animation, 
 - **Animated face.** Two glowing eyes drawn in SVG. They blink, glance around, widen while listening and scan side to side while thinking. Five voice bars react to your voice while the robot listens and pulse with its words while it speaks.
 - **Emotions.** The reply carries an emotion (neutral, alert, happy, confused, sad), shown through eyelid shapes and color.
 - **Voice in.** The browser records the phrase and detects its end after 1.2 s of silence. The server sends it to Whisper (`whisper-large-v3-turbo`) and gets the text back in about 0.7 s.
-- **Voice out.** Speech synthesis in the browser, with the pitch lowered to sound more robotic.
+- **Voice out.** A male Russian voice from [Piper](https://github.com/rhasspy/piper) (Dmitri, Denis or Ruslan), synthesized locally on the server in about 0.6 s. The voice bars follow the real loudness of the speech. A robot effect is applied on the server: flat intonation plus a metallic comb filter, ring modulation or a lo-fi "old computer" bitcrush (`robotize.js`). Without Piper it falls back to the browser's speech synthesis.
 - **Personality settings.** Humor, sarcasm and honesty (defaults 0 / 0 / 90%). They change by voice and persist through the conversation.
 - **Short, wrist-sized answers.** One or two sentences, plain spoken language, no made-up data: with no sensors or internet, the robot says it has no data instead of inventing the weather or your pulse.
 - **Debug panel.** Text input instead of voice, voice and pitch controls, and a preview of every animation state and emotion.
@@ -42,8 +44,9 @@ So one response drives the voice, the face and the settings display at once.
 |---|---|
 | `persona.js` | Character: system prompt, default settings, reply schema. Kept in one place so it moves to the watch app unchanged. |
 | `server.js` | Small Node.js server with no framework. Serves the prototype and proxies speech recognition and chat, so the API key never reaches the browser. |
+| `robotize.js` | Robot voice effects on the synthesized WAV: comb filter, ring modulation, bitcrush. |
 | `public/face.js` | The face: eyes, eyelids, emotions, blinking, voice bars. |
-| `public/voice.js` | Mic recording with silence detection, and speech synthesis. |
+| `public/voice.js` | Mic recording with silence detection, and speech playback with loudness metering. |
 | `public/app.js` | State machine (off → idle → listening → thinking → speaking), taps, debug panel. |
 
 ## Decisions and measurements
@@ -65,11 +68,24 @@ cp .env.example .env   # then put your key into LLM_API_KEY=
 npm start              # http://localhost:3000
 ```
 
+For the male voice, point `PIPER_EXE` and `PIPER_VOICES` in `.env` to `piper.exe` and a folder with `ru_RU-dmitri-medium.onnx` (and/or `denis`, `ruslan`) from [Piper releases](https://github.com/rhasspy/piper/releases) and [voices](https://huggingface.co/rhasspy/piper-voices).
+
 Tap the watch screen to switch TARS on, then tap again and speak. Space works too.
+
+### On a phone
+
+A phone browser only allows the microphone over HTTPS, so the server also listens on port 3443 with a self-signed certificate.
+
+```bash
+npm run cert   # issues certs/cert.pem for this computer's Wi-Fi IP (rerun if the IP changes)
+npm start      # prints https://<your-ip>:3443
+```
+
+Open that address on a phone in the same Wi-Fi network and accept the certificate warning. On an iPhone you can also install the certificate to remove the warning: open `https://<your-ip>:3443/tars.crt`, install the profile, then enable it under *Settings → General → About → Certificate Trust Settings*.
 
 ## Roadmap
 
-- [ ] Demo video
+- [x] Demo video
 - [ ] HTTPS, so the prototype runs on a phone over Wi-Fi with the microphone
 - [ ] watchOS app in SwiftUI (watchOS 10) with the same face, personality and server
 - [ ] Instant on-device commands (settings, time, status report) that work without a network

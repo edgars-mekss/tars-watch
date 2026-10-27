@@ -42,6 +42,7 @@ function log(text, isError = false) {
 // ---- Касания ----
 
 async function onTap() {
+  voice.unlockSpeech();
   switch (state) {
     case "off":
       return ask({ boot: true });
@@ -120,7 +121,7 @@ async function ask(payload) {
   face.setEmotion(result.emotion);
   setState("speaking");
   subtitle(result.reply);
-  await voice.speak(result.reply, () => face.pulse());
+  await voice.speak(result.reply, (level) => face.setLevel(level), (msg) => log(msg, true));
   if (state === "speaking") setState("idle");
 }
 
@@ -221,25 +222,40 @@ function setupPanel() {
     voice.voiceSettings.pitch = Number($("pitch").value);
     voice.voiceSettings.rate = Number($("rate").value);
     voice.voiceSettings.voiceURI = $("voice-select").value;
+    if ($("effect-select").value) voice.voiceSettings.effect = $("effect-select").value;
     $("pitch-out").textContent = voice.voiceSettings.pitch.toFixed(2);
     $("rate-out").textContent = voice.voiceSettings.rate.toFixed(2);
     voice.saveVoiceSettings();
   };
-  for (const id of ["pitch", "rate", "voice-select"]) $(id).addEventListener("input", syncVoice);
-  $("voice-select").addEventListener("change", () => voice.speak("Голосовой модуль проверен.", () => face.pulse()));
-
-  const fillVoices = () => {
-    const voices = voice.russianVoices();
-    $("voice-select").replaceChildren(
-      new Option("Авто", ""),
-      ...voices.map((v) => new Option(v.name, v.voiceURI, false, v.voiceURI === voice.voiceSettings.voiceURI)),
-    );
-    if (!voices.length) log("Русских голосов в системе не найдено — озвучка будет голосом по умолчанию.");
+  for (const id of ["pitch", "rate", "voice-select", "effect-select"]) $(id).addEventListener("input", syncVoice);
+  const testVoice = () => {
+    voice.unlockSpeech();
+    voice.speak("Голосовой модуль проверен. Все системы в норме, Купер.", (level) => face.setLevel(level), (msg) => log(msg, true));
   };
-  if ("speechSynthesis" in window) {
+  $("voice-select").addEventListener("change", testVoice);
+  $("effect-select").addEventListener("change", testVoice);
+
+  // Сначала мужские голоса Piper с сервера, потом голоса браузера.
+  let piper = [];
+  const fillVoices = () => {
+    const selected = voice.voiceSettings.voiceURI;
+    const option = (label, value) => new Option(label, value, false, value === selected);
+    $("voice-select").replaceChildren(
+      option(piper.length ? "Авто (Дмитрий)" : "Авто", ""),
+      ...piper.map((v) => option(`${v.name} — мужской, Piper`, `piper:${v.id}`)),
+      ...voice.russianVoices().map((v) => option(`${v.name} — браузер`, v.voiceURI)),
+    );
+  };
+  fillVoices();
+  voice.serverVoices().then(({ piper: list = [], effects = [] }) => {
+    piper = list;
     fillVoices();
-    speechSynthesis.addEventListener("voiceschanged", fillVoices);
-  }
+    $("effect-select").replaceChildren(
+      ...effects.map((fx) => new Option(fx.name, fx.id, false, fx.id === voice.voiceSettings.effect)),
+    );
+    if (!list.length) log("Piper не найден — озвучка голосом браузера, эффекты недоступны.");
+  });
+  if ("speechSynthesis" in window) speechSynthesis.addEventListener("voiceschanged", fillVoices);
   $("pitch-out").textContent = Number(pitch).toFixed(2);
   $("rate-out").textContent = Number(rate).toFixed(2);
 

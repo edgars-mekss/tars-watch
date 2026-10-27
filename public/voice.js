@@ -7,6 +7,8 @@ const SILENCE_MS = 1200; // пауза после речи — конец фра
 const NO_SPEECH_MS = 6000; // так и не заговорили
 const MAX_MS = 15000; // самая длинная фраза
 
+const rms = (samples) => Math.sqrt(samples.reduce((sum, v) => sum + v * v, 0) / samples.length);
+
 // Записывает одну фразу и возвращает распознанный текст ("" — тишина или отмена).
 // onLevel(0..1) — громкость для анимации, onRecorded() — запись закончилась, идёт распознавание.
 export function listen({ onLevel, onRecorded } = {}) {
@@ -15,7 +17,7 @@ export function listen({ onLevel, onRecorded } = {}) {
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true },
     });
-    const ctx = new AudioContext();
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
     await ctx.resume(); // без этого анализатор может молча отдавать нули
     const analyser = ctx.createAnalyser();
     analyser.fftSize = 1024;
@@ -33,10 +35,10 @@ export function listen({ onLevel, onRecorded } = {}) {
     await new Promise((resolve) => {
       const timer = setInterval(() => {
         analyser.getFloatTimeDomainData(samples);
-        const rms = Math.sqrt(samples.reduce((sum, v) => sum + v * v, 0) / samples.length);
-        onLevel?.(Math.min(1, rms * 10));
+        const level = rms(samples);
+        onLevel?.(Math.min(1, level * 10));
         const now = performance.now();
-        if (rms > VOICE_RMS) lastVoice = now;
+        if (level > VOICE_RMS) lastVoice = now;
         const finished =
           request ||
           (lastVoice && now - lastVoice > SILENCE_MS) ||
@@ -56,10 +58,12 @@ export function listen({ onLevel, onRecorded } = {}) {
     if (request === "abort" || !lastVoice) return "";
 
     onRecorded?.();
-    const blob = new Blob(chunks, { type: rec.mimeType });
+    // Chrome пишет audio/webm, Safari на iPhone — audio/mp4.
+    const type = rec.mimeType || chunks[0]?.type || "audio/webm";
+    const blob = new Blob(chunks, { type });
     const res = await fetch("/api/transcribe", {
       method: "POST",
-      headers: { "Content-Type": blob.type || "audio/webm" },
+      headers: { "Content-Type": type },
       body: blob,
     });
     const data = await res.json();
@@ -70,7 +74,8 @@ export function listen({ onLevel, onRecorded } = {}) {
 }
 
 const SETTINGS_KEY = "tars.voice";
-export const voiceSettings = { voiceURI: "", pitch: 0.7, rate: 1.05 };
+// voiceURI: "" — по умолчанию (Piper, Дмитрий), "piper:<id>" — голос Piper с сервера, иначе — голос браузера.
+export const voiceSettings = { voiceURI: "", effect: "metal", pitch: 0.7, rate: 1.05 };
 try {
   Object.assign(voiceSettings, JSON.parse(localStorage.getItem(SETTINGS_KEY)) ?? {});
 } catch {}
@@ -81,8 +86,22 @@ export function saveVoiceSettings() {
   } catch {}
 }
 
+const DEFAULT_VOICE = "piper:dmitri";
+
 export function russianVoices() {
-  return speechSynthesis.getVoices().filter((v) => v.lang.toLowerCase().startsWith("ru"));
+  return "speechSynthesis" in window
+    ? speechSynthesis.getVoices().filter((v) => v.lang.toLowerCase().startsWith("ru"))
+    : [];
+}
+
+// Голоса Piper и эффекты «голос робота», которые предлагает сервер: { piper: [{ id, name }], effects: [...] }.
+export async function serverVoices() {
+  try {
+    const res = await fetch("/api/voices");
+    return await res.json();
+  } catch {
+    return { piper: [], effects: [] };
+  }
 }
 
 // Мужские голоса ближе к ТАРСу из фильма.
@@ -97,11 +116,110 @@ function pickVoice() {
   );
 }
 
-let current = null; // держим ссылку, иначе Chrome может потерять onend
-let finish = null;
+// Один общий <audio> для голоса Piper. Обычный аудиоэлемент, а не Web Audio: на iPhone Web Audio
+// молчит в беззвучном режиме. Safari пускает звук только после касания, поэтому при касании
+// элемент «разблокируется» беззвучным файлом и дальше может играть ответы.
+const player = new Audio();
+const SILENT_WAV = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAIlYAAESsAAACABAAZGF0YQAAAAA=";
 
-export function speak(text, onBoundary) {
+// То же для голоса браузера: при первом касании произносим пустую фразу.
+let unlocked = false;
+export function unlockSpeech() {
+  if (player.paused) {
+    player.src = SILENT_WAV;
+    player.play().catch(() => {});
+  }
+  if (unlocked || !("speechSynthesis" in window)) return;
+  unlocked = true;
+  const u = new SpeechSynthesisUtterance(" ");
+  u.volume = 0;
+  speechSynthesis.speak(u);
+}
+
+let current = null; // держим ссылку, иначе Chrome может потерять onend
+let finish = null; // завершает текущую фразу
+let generation = 0; // растёт при каждой остановке: синтез, который не успел, не заговорит
+
+// Произносит текст. onLevel(0..1) — громкость речи для анимации,
+// onError(сообщение) — голос Piper не сработал и ТАРС перешёл на голос браузера.
+export async function speak(text, onLevel, onError) {
   stopSpeaking();
+  const voice = voiceSettings.voiceURI || DEFAULT_VOICE;
+  if (voice.startsWith("piper:")) {
+    try {
+      return await speakPiper(text, voice.slice("piper:".length), onLevel);
+    } catch (err) {
+      onError?.(`Голос Piper: ${err.message}. Говорю голосом браузера.`);
+    }
+  }
+  return speakBrowser(text, onLevel);
+}
+
+async function speakPiper(text, voice, onLevel) {
+  const gen = generation;
+  const res = await fetch("/api/tts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, voice, rate: voiceSettings.rate, effect: voiceSettings.effect }),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`);
+  const wav = await res.arrayBuffer();
+  if (gen !== generation) return; // перебили, пока шёл синтез
+
+  const levels = loudness(wav);
+  const url = URL.createObjectURL(new Blob([wav], { type: "audio/wav" }));
+  return new Promise((resolve, reject) => {
+    const meter = setInterval(() => onLevel?.(levels[Math.floor(player.currentTime / LEVEL_STEP_S)] ?? 0), 50);
+    const cleanup = () => {
+      finish = null;
+      clearInterval(meter);
+      player.onended = player.onerror = null;
+      player.pause();
+      URL.revokeObjectURL(url);
+    };
+    const done = () => {
+      if (finish !== done) return;
+      cleanup();
+      resolve();
+    };
+    const fail = (message) => {
+      if (finish !== done) return;
+      cleanup();
+      reject(new Error(message));
+    };
+    finish = done;
+    player.onended = done;
+    player.onerror = () => fail("браузер не смог воспроизвести звук");
+    player.src = url;
+    player.play().catch((err) => {
+      fail(err.name === "NotAllowedError" ? "браузер не разрешил звук без касания" : err.message);
+    });
+  });
+}
+
+// Громкость WAV (PCM 16 бит) по кусочкам — для полосок под глазами во время речи.
+const LEVEL_STEP_S = 0.05;
+function loudness(buffer) {
+  const view = new DataView(buffer);
+  const rate = view.getUint32(24, true);
+  let offset = 12;
+  while (offset + 8 <= view.byteLength && view.getUint32(offset) !== 0x64617461 /* "data" */) {
+    offset += 8 + view.getUint32(offset + 4, true);
+  }
+  const start = offset + 8;
+  const end = Math.min(view.byteLength, start + view.getUint32(offset + 4, true));
+  const step = Math.round(rate * LEVEL_STEP_S) * 2;
+  const levels = [];
+  for (let i = start; i + 1 < end; i += step) {
+    let sum = 0;
+    let n = 0;
+    for (let j = i; j + 1 < Math.min(i + step, end); j += 2, n++) sum += (view.getInt16(j, true) / 32768) ** 2;
+    levels.push(Math.min(1, Math.sqrt(sum / n) * 4));
+  }
+  return levels;
+}
+
+function speakBrowser(text, onLevel) {
   if (!("speechSynthesis" in window)) return Promise.resolve();
   return new Promise((resolve) => {
     const u = new SpeechSynthesisUtterance(text);
@@ -109,7 +227,7 @@ export function speak(text, onBoundary) {
     u.voice = pickVoice() ?? null;
     u.pitch = voiceSettings.pitch;
     u.rate = voiceSettings.rate;
-    u.onboundary = () => onBoundary?.();
+    u.onboundary = () => onLevel?.(1);
 
     // Завершаем только «свою» фразу: onend отменённой фразы приходит асинхронно.
     const done = () => {
@@ -129,6 +247,7 @@ export function speak(text, onBoundary) {
 }
 
 export function stopSpeaking() {
+  generation++;
   if ("speechSynthesis" in window) speechSynthesis.cancel();
   finish?.();
 }

@@ -1,12 +1,16 @@
 // Локальный сервер: отдаёт веб-прототип из public/ и проксирует разговор в языковую модель,
 // чтобы ключ не попадал в браузер. Провайдер выбирается в .env (LLM_PROVIDER).
 import http from "node:http";
+import https from "node:https";
 import os from "node:os";
 import path from "node:path";
-import { readFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { readFile, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import Anthropic from "@anthropic-ai/sdk";
 import { BOOT_MESSAGE, EMOTIONS, REPLY_SCHEMA, SYSTEM_PROMPT } from "./persona.js";
+import { EFFECTS, MONOTONE_ARGS, robotize } from "./robotize.js";
 
 try {
   process.loadEnvFile(); // ключи и выбор модели из .env
@@ -15,7 +19,12 @@ try {
 }
 
 const PORT = Number(process.env.PORT) || 3000;
-const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "public");
+// HTTPS нужен телефону: без него браузер не даёт микрофон. Сертификат — `npm run cert`.
+const HTTPS_PORT = Number(process.env.HTTPS_PORT) || 3443;
+const ROOT = path.dirname(fileURLToPath(import.meta.url));
+const CERT_FILE = path.join(ROOT, "certs", "cert.pem");
+const KEY_FILE = path.join(ROOT, "certs", "key.pem");
+const PUBLIC_DIR = path.join(ROOT, "public");
 const MAX_BODY = 16 * 1024;
 const MAX_AUDIO = 5 * 1024 * 1024; // ~15 секунд речи с запасом
 
@@ -171,6 +180,42 @@ async function transcribe(audio, type = "audio/webm") {
   return HALLUCINATIONS.some((h) => text.toLowerCase().includes(h)) ? "" : text;
 }
 
+// Озвучка мужским голосом: Piper — локально и бесплатно. По умолчанию берём из «Помощника» (D:\Project3).
+const PIPER_EXE = process.env.PIPER_EXE ?? "D:/Project3/runtime/piper/piper.exe";
+const PIPER_VOICES_DIR = process.env.PIPER_VOICES ?? "D:/Project3/runtime/voices";
+const PIPER_NAMES = { dmitri: "Дмитрий", denis: "Денис", ruslan: "Руслан" };
+const MAX_TTS_CHARS = 600;
+
+const piperModel = (voice) => path.join(PIPER_VOICES_DIR, `ru_RU-${voice}-medium.onnx`);
+
+function piperVoices() {
+  if (!existsSync(PIPER_EXE)) return [];
+  return Object.entries(PIPER_NAMES)
+    .filter(([id]) => existsSync(piperModel(id)))
+    .map(([id, name]) => ({ id, name }));
+}
+
+async function synthesize(text, voice, rate = 1, effect = "none") {
+  const out = path.join(os.tmpdir(), `tars-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.wav`);
+  const lengthScale = (1 / Math.min(2, Math.max(0.5, Number(rate) || 1))).toFixed(2);
+  await new Promise((resolve, reject) => {
+    const args = ["--model", piperModel(voice), "--output_file", out, "--length_scale", lengthScale, "--quiet"];
+    if (EFFECTS[effect]?.monotone) args.push(...MONOTONE_ARGS);
+    const piper = spawn(PIPER_EXE, args, {
+      cwd: path.dirname(PIPER_EXE),
+      windowsHide: true,
+    });
+    piper.on("error", reject);
+    piper.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`Piper завершился с кодом ${code}`))));
+    piper.stdin.end(text, "utf8");
+  });
+  try {
+    return robotize(await readFile(out), effect);
+  } finally {
+    await rm(out, { force: true });
+  }
+}
+
 function describeError(err) {
   if (err instanceof Anthropic.AuthenticationError) return "Ключ API не найден или неверный";
   if (err instanceof Anthropic.RateLimitError) return "Превышен лимит запросов к API";
@@ -230,7 +275,7 @@ async function serveStatic(req, res) {
   }
 }
 
-const server = http.createServer(async (req, res) => {
+async function handle(req, res) {
   try {
     if (req.method === "POST" && req.url === "/api/chat") {
       const body = await readJson(req);
@@ -245,10 +290,30 @@ const server = http.createServer(async (req, res) => {
       if (!audio.length) return sendJson(res, 400, { error: "Пустая запись" });
       return sendJson(res, 200, { text: await transcribe(audio, req.headers["content-type"]) });
     }
+    if (req.method === "GET" && req.url === "/api/voices") {
+      const effects = Object.entries(EFFECTS).map(([id, fx]) => ({ id, name: fx.name }));
+      return sendJson(res, 200, { piper: piperVoices(), effects });
+    }
+    if (req.method === "POST" && req.url === "/api/tts") {
+      const { text, voice, rate, effect = "none" } = await readJson(req);
+      const valid = typeof text === "string" && text.trim() && text.length <= MAX_TTS_CHARS;
+      if (!valid || !(voice in PIPER_NAMES) || !(effect in EFFECTS)) {
+        return sendJson(res, 400, { error: "Нужны text и voice" });
+      }
+      if (!piperVoices().some((v) => v.id === voice)) return sendJson(res, 503, { error: "Piper не найден" });
+      const wav = await synthesize(text.trim(), voice, rate, effect);
+      res.writeHead(200, { "Content-Type": "audio/wav", "Cache-Control": "no-store" });
+      return res.end(wav);
+    }
     if (req.method === "POST" && req.url === "/api/reset") {
       const body = await readJson(req);
       sessions.delete(body.sessionId);
       return sendJson(res, 200, { ok: true });
+    }
+    // Сертификат для установки на iPhone (Настройки → Основные → VPN и управление устройством).
+    if (req.method === "GET" && req.url === "/tars.crt" && existsSync(CERT_FILE)) {
+      res.writeHead(200, { "Content-Type": "application/x-x509-ca-cert" });
+      return res.end(readFileSync(CERT_FILE));
     }
     if (req.method === "GET") return serveStatic(req, res);
     sendJson(res, 405, { error: "Метод не поддерживается" });
@@ -256,13 +321,24 @@ const server = http.createServer(async (req, res) => {
     console.error(err);
     sendJson(res, 502, { error: describeError(err) });
   }
+}
+
+function lanAddresses() {
+  return Object.values(os.networkInterfaces())
+    .flat()
+    .filter((net) => net?.family === "IPv4" && !net.internal)
+    .map((net) => net.address);
+}
+
+http.createServer(handle).listen(PORT, "0.0.0.0", () => {
+  console.log(`TARS на связи: http://localhost:${PORT}  (${PROVIDER}: ${MODEL})`);
 });
 
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`TARS на связи: http://localhost:${PORT}  (${PROVIDER}: ${MODEL})`);
-  for (const nets of Object.values(os.networkInterfaces())) {
-    for (const net of nets ?? []) {
-      if (net.family === "IPv4" && !net.internal) console.log(`  в локальной сети: http://${net.address}:${PORT}`);
-    }
-  }
-});
+if (existsSync(CERT_FILE) && existsSync(KEY_FILE)) {
+  const tls = { cert: readFileSync(CERT_FILE), key: readFileSync(KEY_FILE) };
+  https.createServer(tls, handle).listen(HTTPS_PORT, "0.0.0.0", () => {
+    for (const ip of lanAddresses()) console.log(`  с телефона:   https://${ip}:${HTTPS_PORT}`);
+  });
+} else {
+  console.log("  для телефона нужен HTTPS: выполните npm run cert и перезапустите сервер");
+}
