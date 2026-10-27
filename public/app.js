@@ -107,13 +107,14 @@ async function ask(payload) {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId, ...payload }),
+      body: JSON.stringify({ sessionId, lang: voice.voiceSettings.lang, ...payload }),
     });
     result = await res.json();
     if (!res.ok) throw new Error(result.error ?? `HTTP ${res.status}`);
   } catch (err) {
     log(err.message, true);
-    result = { reply: "Связь с сервером потеряна.", emotion: "error", settings: null };
+    const reply = voice.voiceSettings.lang === "en" ? "Connection to the server is lost." : "Связь с сервером потеряна.";
+    result = { reply, emotion: "error", settings: null };
   }
   if (state !== "thinking") return; // за время ожидания часы выключили
 
@@ -221,39 +222,53 @@ function setupPanel() {
   const syncVoice = () => {
     voice.voiceSettings.pitch = Number($("pitch").value);
     voice.voiceSettings.rate = Number($("rate").value);
-    voice.voiceSettings.voiceURI = $("voice-select").value;
-    if ($("effect-select").value) voice.voiceSettings.effect = $("effect-select").value;
+    voice.langVoice().voiceURI = $("voice-select").value;
+    if ($("effect-select").value) voice.langVoice().effect = $("effect-select").value;
     $("pitch-out").textContent = voice.voiceSettings.pitch.toFixed(2);
     $("rate-out").textContent = voice.voiceSettings.rate.toFixed(2);
     voice.saveVoiceSettings();
   };
   for (const id of ["pitch", "rate", "voice-select", "effect-select"]) $(id).addEventListener("input", syncVoice);
+  const TEST_PHRASE = {
+    ru: "Голосовой модуль проверен. Все системы в норме, Купер.",
+    en: "Voice module check complete. All systems nominal, Cooper.",
+  };
   const testVoice = () => {
     voice.unlockSpeech();
-    voice.speak("Голосовой модуль проверен. Все системы в норме, Купер.", (level) => face.setLevel(level), (msg) => log(msg, true));
+    voice.speak(TEST_PHRASE[voice.voiceSettings.lang], (level) => face.setLevel(level), (msg) => log(msg, true));
   };
   $("voice-select").addEventListener("change", testVoice);
   $("effect-select").addEventListener("change", testVoice);
 
-  // Сначала голоса сервера (Silero, Piper), потом голоса браузера.
+  // Голоса текущего языка: сначала с сервера (Silero, Piper), потом голоса браузера.
   let serverList = [];
+  let effects = [];
   const fillVoices = () => {
-    const selected = voice.voiceSettings.voiceURI;
-    const option = (label, value) => new Option(label, value, false, value === selected);
+    const { voiceURI, effect } = voice.langVoice();
+    const own = serverList.filter((v) => v.lang === voice.voiceSettings.lang);
+    const option = (label, value, selected) => new Option(label, value, false, value === selected);
     $("voice-select").replaceChildren(
-      option(serverList.length ? `Авто (${serverList[0].name})` : "Авто", ""),
-      ...serverList.map((v) => option(`${v.name} — ${v.engine}`, v.id)),
-      ...voice.russianVoices().map((v) => option(`${v.name} — браузер`, v.voiceURI)),
+      option(own.length ? `Авто (${own[0].name})` : "Авто", "", voiceURI),
+      ...own.map((v) => option(`${v.name} — ${v.engine}`, v.id, voiceURI)),
+      ...voice.browserVoices().map((v) => option(`${v.name} — браузер`, v.voiceURI, voiceURI)),
     );
+    $("effect-select").replaceChildren(...effects.map((fx) => option(fx.name, fx.id, effect)));
   };
   fillVoices();
-  voice.serverVoices().then(({ voices: list = [], effects = [] }) => {
-    serverList = list;
+  voice.serverVoices().then((data) => {
+    serverList = data.voices ?? [];
+    effects = data.effects ?? [];
     fillVoices();
-    $("effect-select").replaceChildren(
-      ...effects.map((fx) => new Option(fx.name, fx.id, false, fx.id === voice.voiceSettings.effect)),
-    );
-    if (!list.length) log("На сервере нет Silero и Piper — озвучка голосом браузера, эффекты недоступны.");
+    if (!serverList.length) log("На сервере нет Silero и Piper — озвучка голосом браузера, эффекты недоступны.");
+  });
+
+  // Язык разговора: ТАРС слушает и отвечает на нём, у каждого языка свой голос.
+  $("lang-select").value = voice.voiceSettings.lang;
+  $("lang-select").addEventListener("change", () => {
+    voice.voiceSettings.lang = $("lang-select").value;
+    voice.saveVoiceSettings();
+    fillVoices();
+    testVoice();
   });
   if ("speechSynthesis" in window) speechSynthesis.addEventListener("voiceschanged", fillVoices);
   $("pitch-out").textContent = Number(pitch).toFixed(2);

@@ -7,7 +7,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 import { timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import Anthropic from "@anthropic-ai/sdk";
@@ -133,14 +133,16 @@ async function askAnthropic(messages) {
   return { raw, assistant: { role: "assistant", content: response.content } };
 }
 
-async function chat(sessionId, { text, boot }) {
+const LANG_NAMES = { ru: "русский", en: "English" };
+
+async function chat(sessionId, { text, boot, lang = "ru" }) {
   if (boot) sessions.delete(sessionId);
   let messages = sessions.get(sessionId);
   if (!messages) sessions.set(sessionId, (messages = []));
 
   const said = boot ? BOOT_MESSAGE : text.trim();
   messages.push({ role: "user", content: `${said}
-[Бортовое время: ${shipTime()}]` });
+[Бортовое время: ${shipTime()}] [Язык ответа: ${LANG_NAMES[lang] ?? LANG_NAMES.ru}]` });
 
   let answer;
   try {
@@ -169,12 +171,12 @@ const STT_MODEL = process.env.STT_MODEL ?? "whisper-large-v3-turbo";
 // Whisper на тишине и шуме «слышит» титры из видео, на которых его обучали.
 const HALLUCINATIONS = ["субтитры", "продолжение следует", "спасибо за просмотр", "dimatorzok", "редактор субтитров"];
 
-async function transcribe(audio, type = "audio/webm") {
+async function transcribe(audio, type = "audio/webm", lang = "ru") {
   const ext = type.split(/[/;]/)[1]?.replace("x-", "") || "webm"; // audio/webm;codecs=opus → webm
   const form = new FormData();
   form.append("file", new Blob([audio], { type }), `speech.${ext}`);
   form.append("model", STT_MODEL);
-  form.append("language", "ru");
+  form.append("language", lang in LANG_NAMES ? lang : "ru");
   form.append("temperature", "0");
   form.append("response_format", "json");
   const res = await fetch(`${STT_BASE_URL}/audio/transcriptions`, {
@@ -195,16 +197,35 @@ const MAX_TTS_CHARS = 600;
 const tempWav = () => path.join(os.tmpdir(), `tars-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.wav`);
 
 const PIPER_EXE = process.env.PIPER_EXE ?? "D:/Project3/runtime/piper/piper.exe";
-const PIPER_VOICES_DIR = process.env.PIPER_VOICES ?? "D:/Project3/runtime/voices";
+// Голоса Piper: из «Помощника» (русские) и из папки проекта voices/ (английские). Файл — «язык-имя-качество.onnx».
+const PIPER_DIRS = [process.env.PIPER_VOICES ?? "D:/Project3/runtime/voices", path.join(ROOT, "voices")];
 const PIPER_NAMES = { dmitri: "Дмитрий", denis: "Денис", ruslan: "Руслан" };
-const piperModel = (voice) => path.join(PIPER_VOICES_DIR, `ru_RU-${voice}-medium.onnx`);
+const PIPER_SKIP = ["irina"]; // женский голос из «Помощника» — ТАРСу не подходит
+// Английский голос по умолчанию — ближе всего к ТАРСу из фильма (выбор владельца на слух, 2026-10-28).
+const PIPER_FIRST = ["en_US-ryan-high"];
 
-async function piperSynth(text, voice, rate, fx) {
+function piperVoices() {
+  const found = new Map();
+  for (const dir of PIPER_DIRS) {
+    if (!existsSync(dir)) continue;
+    for (const file of readdirSync(dir)) {
+      const m = file.match(/^(([a-z]{2})_[A-Z]{2}-([a-z_]+)-[a-z_]+)\.onnx$/);
+      if (!m || found.has(m[1]) || PIPER_SKIP.includes(m[3])) continue;
+      const [, id, lang, speaker] = m;
+      const name = PIPER_NAMES[speaker] ?? speaker[0].toUpperCase() + speaker.slice(1).replace("_", " ");
+      found.set(id, { id: `piper:${id}`, name, engine: "Piper", lang, file: path.join(dir, file) });
+    }
+  }
+  const rank = (v) => (PIPER_FIRST.includes(v.id.slice(6)) ? 0 : 1);
+  return [...found.values()].sort((a, b) => rank(a) - rank(b) || a.id.localeCompare(b.id));
+}
+
+async function piperSynth(text, model, rate, fx) {
   const out = tempWav();
   // Для эффекта с понижением тона Piper говорит быстрее: после растяжки скорость речи вернётся.
   const lengthScale = ((fx.pitch ?? 1) / rate).toFixed(3);
   await new Promise((resolve, reject) => {
-    const args = ["--model", piperModel(voice), "--output_file", out, "--length_scale", lengthScale, "--quiet"];
+    const args = ["--model", model, "--output_file", out, "--length_scale", lengthScale, "--quiet"];
     args.push(...(fx.piper ?? []));
     const piper = spawn(PIPER_EXE, args, { cwd: path.dirname(PIPER_EXE), windowsHide: true });
     piper.on("error", reject);
@@ -282,27 +303,24 @@ class Silero {
 
 const silero = new Silero();
 
-// Доступные голоса: [{ id: "silero:eugene", name, engine }], первый — голос по умолчанию.
+// Доступные голоса: [{ id: "silero:eugene", name, engine, lang }]. Первый голос языка — голос по умолчанию.
 function voices() {
   const list = [];
   if (silero.available()) {
-    for (const [id, name] of Object.entries(SILERO_NAMES)) list.push({ id: `silero:${id}`, name, engine: "Silero" });
+    for (const [id, name] of Object.entries(SILERO_NAMES)) list.push({ id: `silero:${id}`, name, engine: "Silero", lang: "ru" });
   }
-  if (existsSync(PIPER_EXE)) {
-    for (const [id, name] of Object.entries(PIPER_NAMES)) {
-      if (existsSync(piperModel(id))) list.push({ id: `piper:${id}`, name, engine: "Piper" });
-    }
-  }
+  if (existsSync(PIPER_EXE)) list.push(...piperVoices());
   return list;
 }
 
-async function synthesize(text, voiceId, rate = 1, effect = "none") {
+async function synthesize(text, voice, rate = 1, effect = "none") {
   const fx = EFFECTS[effect] ?? {};
   const speed = Math.min(2, Math.max(0.5, Number(rate) || 1));
-  const [engine, voice] = voiceId.split(":");
   // Понижать тон без замедления речи умеем только с Piper (он говорит быстрее), поэтому Silero — без него.
-  if (engine === "silero") return robotize(await silero.synth(text, voice, speed), effect, { pitch: false });
-  return robotize(await piperSynth(text, voice, speed, fx), effect);
+  if (voice.engine === "Silero") {
+    return robotize(await silero.synth(text, voice.id.slice("silero:".length), speed), effect, { pitch: false });
+  }
+  return robotize(await piperSynth(text, voice.file, speed, fx), effect);
 }
 
 function describeError(err) {
@@ -410,8 +428,9 @@ function deny(res) {
 
 async function handle(req, res) {
   if (!checkAccess(req, res)) return;
+  const { pathname, searchParams } = new URL(req.url, "http://localhost");
   try {
-    if (req.method === "POST" && req.url === "/api/chat") {
+    if (req.method === "POST" && pathname === "/api/chat") {
       const body = await readJson(req);
       const valid =
         typeof body.sessionId === "string" &&
@@ -419,34 +438,34 @@ async function handle(req, res) {
       if (!valid) return sendJson(res, 400, { error: "Нужны sessionId и text или boot" });
       return sendJson(res, 200, await chat(body.sessionId, body));
     }
-    if (req.method === "POST" && req.url === "/api/transcribe") {
+    if (req.method === "POST" && pathname === "/api/transcribe") {
       const audio = await readBody(req, MAX_AUDIO);
       if (!audio.length) return sendJson(res, 400, { error: "Пустая запись" });
-      return sendJson(res, 200, { text: await transcribe(audio, req.headers["content-type"]) });
+      return sendJson(res, 200, { text: await transcribe(audio, req.headers["content-type"], searchParams.get("lang") ?? "ru") });
     }
-    if (req.method === "GET" && req.url === "/api/voices") {
+    if (req.method === "GET" && pathname === "/api/voices") {
       const effects = Object.entries(EFFECTS).map(([id, fx]) => ({ id, name: fx.name }));
-      return sendJson(res, 200, { voices: voices(), effects });
+      return sendJson(res, 200, { voices: voices().map(({ file, ...v }) => v), effects });
     }
-    if (req.method === "POST" && req.url === "/api/tts") {
-      const { text, voice = "", rate, effect = "none" } = await readJson(req);
+    if (req.method === "POST" && pathname === "/api/tts") {
+      const { text, voice = "", lang = "ru", rate, effect = "none" } = await readJson(req);
       const valid = typeof text === "string" && text.trim() && text.length <= MAX_TTS_CHARS;
       if (!valid || !(effect in EFFECTS)) return sendJson(res, 400, { error: "Нужен text" });
-      // Нет такого голоса (или не выбран) — говорим голосом по умолчанию.
-      const available = voices();
+      // Нет такого голоса (или не выбран) — говорим голосом языка по умолчанию.
+      const available = voices().filter((v) => v.lang === lang);
       const chosen = available.find((v) => v.id === voice) ?? available[0];
-      if (!chosen) return sendJson(res, 503, { error: "Нет ни Silero, ни Piper" });
-      const wav = await synthesize(text.trim(), chosen.id, rate, effect);
+      if (!chosen) return sendJson(res, 503, { error: `Нет голоса для языка ${lang}` });
+      const wav = await synthesize(text.trim(), chosen, rate, effect);
       res.writeHead(200, { "Content-Type": "audio/wav", "Cache-Control": "no-store" });
       return res.end(wav);
     }
-    if (req.method === "POST" && req.url === "/api/reset") {
+    if (req.method === "POST" && pathname === "/api/reset") {
       const body = await readJson(req);
       sessions.delete(body.sessionId);
       return sendJson(res, 200, { ok: true });
     }
     // Сертификат для установки на iPhone (Настройки → Основные → VPN и управление устройством).
-    if (req.method === "GET" && req.url === "/tars.crt" && existsSync(CERT_FILE)) {
+    if (req.method === "GET" && pathname === "/tars.crt" && existsSync(CERT_FILE)) {
       res.writeHead(200, { "Content-Type": "application/x-x509-ca-cert" });
       return res.end(readFileSync(CERT_FILE));
     }

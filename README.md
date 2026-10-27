@@ -12,7 +12,7 @@ A small robot character that lives on your wrist. You tap the screen and talk to
 
 The robot plays **TARS** from *Interstellar*: a laconic, deadpan military robot. Like in the film, its personality has settings in percent. Say *"TARS, set humor to 60%"* and it confirms, its manner changes, and the new value appears on the watch face.
 
-The robot speaks Russian.
+The robot speaks Russian or English: a language switch changes speech recognition, the replies and the voice.
 
 Apple Watch apps can only be built in Xcode on a Mac. So the design, animation, personality and conversation logic are first worked out in a browser, in a 368×448 frame that matches the Apple Watch Series 5 (44 mm) screen. All of this carries over to the watchOS app.
 
@@ -21,6 +21,7 @@ Apple Watch apps can only be built in Xcode on a Mac. So the design, animation, 
 - **Animated face.** Two glowing eyes drawn in SVG. They blink, glance around, widen while listening and scan side to side while thinking. Five voice bars react to your voice while the robot listens and pulse with its words while it speaks.
 - **Emotions.** The reply carries an emotion (neutral, alert, happy, confused, sad), shown through eyelid shapes and color.
 - **Voice in.** The browser records the phrase and detects its end after 1.2 s of silence. The server sends it to Whisper (`whisper-large-v3-turbo`) and gets the text back in about 0.7 s.
+- **English mode.** Whisper listens in English, TARS answers in a terse American military tone, and speaks with the Piper voice Ryan through the film-style effect.
 - **Voice out.** A male Russian voice synthesized locally on the server: [Silero](https://github.com/snakers4/silero-models) Eugene by default (about 0.1 s per phrase, the model stays loaded in a worker process), with [Piper](https://github.com/rhasspy/piper) voices as a fallback. The voice bars follow the real loudness of the speech. A robot effect is applied on the server: a calm, lower "voice from a speaker inside a metal body" close to the film character (pitch shift, band-pass, light saturation), or flat intonation plus a metallic comb filter, ring modulation or a lo-fi "old computer" bitcrush (`robotize.js`). Without Piper it falls back to the browser's speech synthesis.
 - **Personality settings.** Humor, sarcasm and honesty (defaults 0 / 0 / 90%). They change by voice and persist through the conversation.
 - **Short, wrist-sized answers.** One or two sentences, plain spoken language, no made-up data: with no sensors or internet, the robot says it has no data instead of inventing the weather or your pulse.

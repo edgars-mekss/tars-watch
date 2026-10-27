@@ -61,7 +61,7 @@ export function listen({ onLevel, onRecorded } = {}) {
     // Chrome пишет audio/webm, Safari на iPhone — audio/mp4.
     const type = rec.mimeType || chunks[0]?.type || "audio/webm";
     const blob = new Blob(chunks, { type });
-    const res = await fetch("/api/transcribe", {
+    const res = await fetch(`/api/transcribe?lang=${voiceSettings.lang}`, {
       method: "POST",
       headers: { "Content-Type": type },
       body: blob,
@@ -73,12 +73,22 @@ export function listen({ onLevel, onRecorded } = {}) {
   return { done, stop: () => (request ??= "stop"), abort: () => (request = "abort") };
 }
 
-const SETTINGS_KEY = "tars.voice.v2"; // v2: голос по умолчанию — Silero «Евгений» без эффекта
-// voiceURI: "" — голос сервера по умолчанию, "silero:<id>" или "piper:<id>" — голос сервера, иначе — голос браузера.
-export const voiceSettings = { voiceURI: "", effect: "none", pitch: 0.7, rate: 1 };
+const SETTINGS_KEY = "tars.voice.v3"; // v3: голос и эффект — свои для каждого языка
+// lang — язык разговора: "ru" или "en". Для каждого языка свои голос и эффект. voiceURI: "" — голос
+// сервера по умолчанию, "silero:<id>" или "piper:<id>" — голос сервера, иначе — голос браузера.
+export const voiceSettings = {
+  lang: "ru",
+  byLang: { ru: { voiceURI: "", effect: "none" }, en: { voiceURI: "", effect: "film" } },
+  pitch: 0.7,
+  rate: 1,
+};
 try {
-  Object.assign(voiceSettings, JSON.parse(localStorage.getItem(SETTINGS_KEY)) ?? {});
+  const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY));
+  if (saved) Object.assign(voiceSettings, saved, { byLang: { ...voiceSettings.byLang, ...saved.byLang } });
 } catch {}
+
+// Голос и эффект текущего языка.
+export const langVoice = () => voiceSettings.byLang[voiceSettings.lang];
 
 export function saveVoiceSettings() {
   try {
@@ -86,13 +96,14 @@ export function saveVoiceSettings() {
   } catch {}
 }
 
-export function russianVoices() {
+// Голоса браузера для текущего языка.
+export function browserVoices() {
   return "speechSynthesis" in window
-    ? speechSynthesis.getVoices().filter((v) => v.lang.toLowerCase().startsWith("ru"))
+    ? speechSynthesis.getVoices().filter((v) => v.lang.toLowerCase().startsWith(voiceSettings.lang))
     : [];
 }
 
-// Голоса и эффекты «голос робота», которые предлагает сервер: { voices: [{ id, name, engine }], effects: [...] }.
+// Голоса и эффекты «голос робота», которые предлагает сервер: { voices: [{ id, name, engine, lang }], effects: [...] }.
 export async function serverVoices() {
   try {
     const res = await fetch("/api/voices");
@@ -102,14 +113,17 @@ export async function serverVoices() {
   }
 }
 
-// Мужские голоса ближе к ТАРСу из фильма.
-const PREFERRED = ["Dmitry", "Pavel", "Yuri", "Maxim", "Google русский"];
+// Мужские голоса браузера ближе к ТАРСу из фильма.
+const PREFERRED = {
+  ru: ["Dmitry", "Pavel", "Yuri", "Maxim", "Google русский"],
+  en: ["Guy", "Davis", "Daniel", "Alex", "Fred", "Google US English"],
+};
 
 function pickVoice() {
-  const voices = russianVoices();
+  const voices = browserVoices();
   return (
-    voices.find((v) => v.voiceURI === voiceSettings.voiceURI) ??
-    PREFERRED.map((name) => voices.find((v) => v.name.includes(name))).find(Boolean) ??
+    voices.find((v) => v.voiceURI === langVoice().voiceURI) ??
+    PREFERRED[voiceSettings.lang].map((name) => voices.find((v) => v.name.includes(name))).find(Boolean) ??
     voices[0]
   );
 }
@@ -142,7 +156,7 @@ let generation = 0; // растёт при каждой остановке: си
 // onError(сообщение) — голос сервера не сработал и ТАРС перешёл на голос браузера.
 export async function speak(text, onLevel, onError) {
   stopSpeaking();
-  const voice = voiceSettings.voiceURI;
+  const voice = langVoice().voiceURI;
   if (!voice || /^(silero|piper):/.test(voice)) {
     try {
       return await speakServer(text, voice, onLevel);
@@ -158,7 +172,7 @@ async function speakServer(text, voice, onLevel) {
   const res = await fetch("/api/tts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, voice, rate: voiceSettings.rate, effect: voiceSettings.effect }),
+    body: JSON.stringify({ text, voice, lang: voiceSettings.lang, rate: voiceSettings.rate, effect: langVoice().effect }),
   });
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`);
   const wav = await res.arrayBuffer();
@@ -221,7 +235,7 @@ function speakBrowser(text, onLevel) {
   if (!("speechSynthesis" in window)) return Promise.resolve();
   return new Promise((resolve) => {
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = "ru-RU";
+    u.lang = voiceSettings.lang === "en" ? "en-US" : "ru-RU";
     u.voice = pickVoice() ?? null;
     u.pitch = voiceSettings.pitch;
     u.rate = voiceSettings.rate;
