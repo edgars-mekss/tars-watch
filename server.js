@@ -11,7 +11,7 @@ import { readFile, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import Anthropic from "@anthropic-ai/sdk";
 import { BOOT_MESSAGE, EMOTIONS, REPLY_SCHEMA, SYSTEM_PROMPT } from "./persona.js";
-import { EFFECTS, MONOTONE_ARGS, robotize } from "./robotize.js";
+import { EFFECTS, robotize } from "./robotize.js";
 
 try {
   process.loadEnvFile(); // ключи и выбор модели из .env
@@ -205,10 +205,12 @@ function piperVoices() {
 
 async function synthesize(text, voice, rate = 1, effect = "none") {
   const out = path.join(os.tmpdir(), `tars-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.wav`);
-  const lengthScale = (1 / Math.min(2, Math.max(0.5, Number(rate) || 1))).toFixed(2);
+  // Для эффекта с понижением тона Piper говорит быстрее: после растяжки скорость речи вернётся.
+  const fx = EFFECTS[effect] ?? {};
+  const lengthScale = ((fx.pitch ?? 1) / Math.min(2, Math.max(0.5, Number(rate) || 1))).toFixed(3);
   await new Promise((resolve, reject) => {
     const args = ["--model", piperModel(voice), "--output_file", out, "--length_scale", lengthScale, "--quiet"];
-    if (EFFECTS[effect]?.monotone) args.push(...MONOTONE_ARGS);
+    args.push(...(fx.piper ?? []));
     const piper = spawn(PIPER_EXE, args, {
       cwd: path.dirname(PIPER_EXE),
       windowsHide: true,
