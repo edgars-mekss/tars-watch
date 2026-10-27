@@ -5,6 +5,7 @@ import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -19,6 +20,13 @@ try {
 }
 
 const PORT = Number(process.env.PORT) || 3000;
+// На VPS сервер слушает только 127.0.0.1, а наружу его выставляет Caddy с настоящим HTTPS.
+const LISTEN_HOST = process.env.LISTEN_HOST ?? "0.0.0.0";
+// Секретная ссылка: если ACCESS_TOKEN задан, пускаем только с ним — иначе чужие потратят лимит Groq.
+// Первый вход — https://адрес/?key=TOKEN, дальше браузер помнит cookie. Приложение для часов шлёт
+// заголовок Authorization: Bearer TOKEN.
+const ACCESS_TOKEN = process.env.ACCESS_TOKEN ?? "";
+const COOKIE = "tars_key";
 // HTTPS нужен телефону: без него браузер не даёт микрофон. Сертификат — `npm run cert`.
 const HTTPS_PORT = Number(process.env.HTTPS_PORT) || 3443;
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -275,7 +283,52 @@ async function serveStatic(req, res) {
   }
 }
 
+function sameSecret(given) {
+  const a = Buffer.from(given ?? "");
+  const b = Buffer.from(ACCESS_TOKEN);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+// true — запрос пропущен; иначе ответ уже отправлен (переадресация или отказ).
+function checkAccess(req, res) {
+  if (!ACCESS_TOKEN) return true;
+  const url = new URL(req.url, "http://localhost");
+  const key = url.searchParams.get("key");
+  if (key !== null) {
+    if (!sameSecret(key)) return deny(res);
+    url.searchParams.delete("key");
+    res.writeHead(303, {
+      "Set-Cookie": `${COOKIE}=${encodeURIComponent(key)}; Max-Age=31536000; Path=/; HttpOnly; Secure; SameSite=Lax`,
+      Location: url.pathname + url.search,
+    });
+    res.end();
+    return false;
+  }
+  const bearer = req.headers.authorization?.match(/^Bearer (.+)$/)?.[1];
+  const cookie = (req.headers.cookie ?? "")
+    .split(";")
+    .map((part) => part.trim().split("="))
+    .find(([name]) => name === COOKIE)?.[1];
+  if (sameSecret(bearer) || sameSecret(cookie && safeDecode(cookie))) return true;
+  return deny(res);
+}
+
+function safeDecode(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return "";
+  }
+}
+
+function deny(res) {
+  res.writeHead(401, { "Content-Type": "text/plain; charset=utf-8" });
+  res.end("TARS: нужна ссылка доступа.");
+  return false;
+}
+
 async function handle(req, res) {
+  if (!checkAccess(req, res)) return;
   try {
     if (req.method === "POST" && req.url === "/api/chat") {
       const body = await readJson(req);
@@ -330,7 +383,7 @@ function lanAddresses() {
     .map((net) => net.address);
 }
 
-http.createServer(handle).listen(PORT, "0.0.0.0", () => {
+http.createServer(handle).listen(PORT, LISTEN_HOST, () => {
   console.log(`TARS на связи: http://localhost:${PORT}  (${PROVIDER}: ${MODEL})`);
 });
 
