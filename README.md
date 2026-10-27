@@ -4,7 +4,9 @@
 
 > **Status: web prototype, work in progress.** Built with Claude Code. The watchOS (SwiftUI) port comes next.
 
-<p align="center"><a href="docs/tars-demo.mp4"><img src="docs/preview.jpg" width="300" alt="TARS running on an iPhone in the Apple Watch frame"></a><br><sub>▶ <a href="docs/tars-demo.mp4">Demo video (1:40)</a>: switching on, a status report, mission questions, a joke at 60% humor. In Russian.</sub></p>
+https://github.com/user-attachments/assets/8d33444c-3dae-4566-99cf-04d0e1bcf0b7
+
+<sub>Demo (1:40): switching on, a status report, mission questions, a joke at 60% humor. In Russian.</sub>
 
 A small robot character that lives on your wrist. You tap the screen and talk to it. It answers out loud while its glowing eyes show what it is doing: listening, thinking, speaking, or reacting with an emotion.
 
