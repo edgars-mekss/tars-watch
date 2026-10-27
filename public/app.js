@@ -235,25 +235,25 @@ function setupPanel() {
   $("voice-select").addEventListener("change", testVoice);
   $("effect-select").addEventListener("change", testVoice);
 
-  // Сначала мужские голоса Piper с сервера, потом голоса браузера.
-  let piper = [];
+  // Сначала голоса сервера (Silero, Piper), потом голоса браузера.
+  let serverList = [];
   const fillVoices = () => {
     const selected = voice.voiceSettings.voiceURI;
     const option = (label, value) => new Option(label, value, false, value === selected);
     $("voice-select").replaceChildren(
-      option(piper.length ? "Авто (Дмитрий)" : "Авто", ""),
-      ...piper.map((v) => option(`${v.name} — мужской, Piper`, `piper:${v.id}`)),
+      option(serverList.length ? `Авто (${serverList[0].name})` : "Авто", ""),
+      ...serverList.map((v) => option(`${v.name} — ${v.engine}`, v.id)),
       ...voice.russianVoices().map((v) => option(`${v.name} — браузер`, v.voiceURI)),
     );
   };
   fillVoices();
-  voice.serverVoices().then(({ piper: list = [], effects = [] }) => {
-    piper = list;
+  voice.serverVoices().then(({ voices: list = [], effects = [] }) => {
+    serverList = list;
     fillVoices();
     $("effect-select").replaceChildren(
       ...effects.map((fx) => new Option(fx.name, fx.id, false, fx.id === voice.voiceSettings.effect)),
     );
-    if (!list.length) log("Piper не найден — озвучка голосом браузера, эффекты недоступны.");
+    if (!list.length) log("На сервере нет Silero и Piper — озвучка голосом браузера, эффекты недоступны.");
   });
   if ("speechSynthesis" in window) speechSynthesis.addEventListener("voiceschanged", fillVoices);
   $("pitch-out").textContent = Number(pitch).toFixed(2);

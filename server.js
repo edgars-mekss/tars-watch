@@ -5,6 +5,7 @@ import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import readline from "node:readline";
 import { timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
@@ -188,42 +189,120 @@ async function transcribe(audio, type = "audio/webm") {
   return HALLUCINATIONS.some((h) => text.toLowerCase().includes(h)) ? "" : text;
 }
 
-// Озвучка мужским голосом: Piper — локально и бесплатно. По умолчанию берём из «Помощника» (D:\Project3).
+// Озвучка: два локальных бесплатных движка. По умолчанию берём их из «Помощника» (D:\Project3).
+// Silero звучит живее (основной голос ТАРСа — Евгений), Piper — запасной.
+const MAX_TTS_CHARS = 600;
+const tempWav = () => path.join(os.tmpdir(), `tars-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.wav`);
+
 const PIPER_EXE = process.env.PIPER_EXE ?? "D:/Project3/runtime/piper/piper.exe";
 const PIPER_VOICES_DIR = process.env.PIPER_VOICES ?? "D:/Project3/runtime/voices";
 const PIPER_NAMES = { dmitri: "Дмитрий", denis: "Денис", ruslan: "Руслан" };
-const MAX_TTS_CHARS = 600;
-
 const piperModel = (voice) => path.join(PIPER_VOICES_DIR, `ru_RU-${voice}-medium.onnx`);
 
-function piperVoices() {
-  if (!existsSync(PIPER_EXE)) return [];
-  return Object.entries(PIPER_NAMES)
-    .filter(([id]) => existsSync(piperModel(id)))
-    .map(([id, name]) => ({ id, name }));
-}
-
-async function synthesize(text, voice, rate = 1, effect = "none") {
-  const out = path.join(os.tmpdir(), `tars-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.wav`);
+async function piperSynth(text, voice, rate, fx) {
+  const out = tempWav();
   // Для эффекта с понижением тона Piper говорит быстрее: после растяжки скорость речи вернётся.
-  const fx = EFFECTS[effect] ?? {};
-  const lengthScale = ((fx.pitch ?? 1) / Math.min(2, Math.max(0.5, Number(rate) || 1))).toFixed(3);
+  const lengthScale = ((fx.pitch ?? 1) / rate).toFixed(3);
   await new Promise((resolve, reject) => {
     const args = ["--model", piperModel(voice), "--output_file", out, "--length_scale", lengthScale, "--quiet"];
     args.push(...(fx.piper ?? []));
-    const piper = spawn(PIPER_EXE, args, {
-      cwd: path.dirname(PIPER_EXE),
-      windowsHide: true,
-    });
+    const piper = spawn(PIPER_EXE, args, { cwd: path.dirname(PIPER_EXE), windowsHide: true });
     piper.on("error", reject);
     piper.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`Piper завершился с кодом ${code}`))));
     piper.stdin.end(text, "utf8");
   });
   try {
-    return robotize(await readFile(out), effect);
+    return await readFile(out);
   } finally {
     await rm(out, { force: true });
   }
+}
+
+const SILERO_PY = process.env.SILERO_PY ?? "D:/Project3/runtime/pyenv/Scripts/python.exe";
+const SILERO_MODEL = process.env.SILERO_MODEL ?? "D:/Project3/runtime/silero/v5_6_ru.pt";
+const SILERO_NAMES = { eugene: "Евгений", aidar: "Айдар" };
+
+// Silero — отдельный процесс Python (tts/silero_worker.py): модель грузится один раз,
+// дальше по строке JSON на фразу. Фразы идут по очереди.
+class Silero {
+  #proc = null;
+  #ready = null;
+  #waiting = [];
+  #queue = Promise.resolve();
+
+  available() {
+    return existsSync(SILERO_PY) && existsSync(SILERO_MODEL);
+  }
+
+  #nextLine() {
+    return new Promise((resolve) => this.#waiting.push(resolve));
+  }
+
+  start() {
+    if (this.#ready) return this.#ready;
+    const proc = spawn(SILERO_PY, ["-I", path.join(ROOT, "tts", "silero_worker.py"), SILERO_MODEL], {
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    readline.createInterface({ input: proc.stdout }).on("line", (line) => this.#waiting.shift()?.(line));
+    const stop = (why) => {
+      this.#ready = null;
+      for (const resolve of this.#waiting.splice(0)) resolve(JSON.stringify({ error: why }));
+    };
+    proc.on("error", (err) => stop(`Silero не запустился: ${err.message}`));
+    proc.on("exit", () => stop("Silero остановился"));
+    this.#proc = proc;
+    this.#ready = this.#nextLine().then((line) => {
+      if (!line.includes('"ready"')) {
+        this.#ready = null;
+        throw new Error(JSON.parse(line).error ?? "Silero не запустился");
+      }
+    });
+    return this.#ready;
+  }
+
+  synth(text, speaker, speed) {
+    const job = this.#queue.then(async () => {
+      await this.start();
+      const out = tempWav();
+      try {
+        const answer = this.#nextLine();
+        this.#proc.stdin.write(JSON.stringify({ text, speaker, speed, out, rate: 24000 }) + "\n");
+        const result = JSON.parse(await answer);
+        if (!result.ok) throw new Error(result.error ?? "Silero: ошибка синтеза");
+        return await readFile(out);
+      } finally {
+        await rm(out, { force: true });
+      }
+    });
+    this.#queue = job.catch(() => {});
+    return job;
+  }
+}
+
+const silero = new Silero();
+
+// Доступные голоса: [{ id: "silero:eugene", name, engine }], первый — голос по умолчанию.
+function voices() {
+  const list = [];
+  if (silero.available()) {
+    for (const [id, name] of Object.entries(SILERO_NAMES)) list.push({ id: `silero:${id}`, name, engine: "Silero" });
+  }
+  if (existsSync(PIPER_EXE)) {
+    for (const [id, name] of Object.entries(PIPER_NAMES)) {
+      if (existsSync(piperModel(id))) list.push({ id: `piper:${id}`, name, engine: "Piper" });
+    }
+  }
+  return list;
+}
+
+async function synthesize(text, voiceId, rate = 1, effect = "none") {
+  const fx = EFFECTS[effect] ?? {};
+  const speed = Math.min(2, Math.max(0.5, Number(rate) || 1));
+  const [engine, voice] = voiceId.split(":");
+  // Понижать тон без замедления речи умеем только с Piper (он говорит быстрее), поэтому Silero — без него.
+  if (engine === "silero") return robotize(await silero.synth(text, voice, speed), effect, { pitch: false });
+  return robotize(await piperSynth(text, voice, speed, fx), effect);
 }
 
 function describeError(err) {
@@ -347,16 +426,17 @@ async function handle(req, res) {
     }
     if (req.method === "GET" && req.url === "/api/voices") {
       const effects = Object.entries(EFFECTS).map(([id, fx]) => ({ id, name: fx.name }));
-      return sendJson(res, 200, { piper: piperVoices(), effects });
+      return sendJson(res, 200, { voices: voices(), effects });
     }
     if (req.method === "POST" && req.url === "/api/tts") {
-      const { text, voice, rate, effect = "none" } = await readJson(req);
+      const { text, voice = "", rate, effect = "none" } = await readJson(req);
       const valid = typeof text === "string" && text.trim() && text.length <= MAX_TTS_CHARS;
-      if (!valid || !(voice in PIPER_NAMES) || !(effect in EFFECTS)) {
-        return sendJson(res, 400, { error: "Нужны text и voice" });
-      }
-      if (!piperVoices().some((v) => v.id === voice)) return sendJson(res, 503, { error: "Piper не найден" });
-      const wav = await synthesize(text.trim(), voice, rate, effect);
+      if (!valid || !(effect in EFFECTS)) return sendJson(res, 400, { error: "Нужен text" });
+      // Нет такого голоса (или не выбран) — говорим голосом по умолчанию.
+      const available = voices();
+      const chosen = available.find((v) => v.id === voice) ?? available[0];
+      if (!chosen) return sendJson(res, 503, { error: "Нет ни Silero, ни Piper" });
+      const wav = await synthesize(text.trim(), chosen.id, rate, effect);
       res.writeHead(200, { "Content-Type": "audio/wav", "Cache-Control": "no-store" });
       return res.end(wav);
     }
@@ -384,6 +464,9 @@ function lanAddresses() {
     .filter((net) => net?.family === "IPv4" && !net.internal)
     .map((net) => net.address);
 }
+
+// Модель Silero грузится несколько секунд — заранее, чтобы первый ответ не ждал.
+if (silero.available()) silero.start().catch((err) => console.error(err.message));
 
 http.createServer(handle).listen(PORT, LISTEN_HOST, () => {
   console.log(`TARS на связи: http://localhost:${PORT}  (${PROVIDER}: ${MODEL})`);

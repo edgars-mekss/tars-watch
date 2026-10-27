@@ -73,9 +73,9 @@ export function listen({ onLevel, onRecorded } = {}) {
   return { done, stop: () => (request ??= "stop"), abort: () => (request = "abort") };
 }
 
-const SETTINGS_KEY = "tars.voice";
-// voiceURI: "" — по умолчанию (Piper, Дмитрий), "piper:<id>" — голос Piper с сервера, иначе — голос браузера.
-export const voiceSettings = { voiceURI: "", effect: "metal", pitch: 0.7, rate: 1.05 };
+const SETTINGS_KEY = "tars.voice.v2"; // v2: голос по умолчанию — Silero «Евгений» без эффекта
+// voiceURI: "" — голос сервера по умолчанию, "silero:<id>" или "piper:<id>" — голос сервера, иначе — голос браузера.
+export const voiceSettings = { voiceURI: "", effect: "none", pitch: 0.7, rate: 1 };
 try {
   Object.assign(voiceSettings, JSON.parse(localStorage.getItem(SETTINGS_KEY)) ?? {});
 } catch {}
@@ -86,21 +86,19 @@ export function saveVoiceSettings() {
   } catch {}
 }
 
-const DEFAULT_VOICE = "piper:dmitri";
-
 export function russianVoices() {
   return "speechSynthesis" in window
     ? speechSynthesis.getVoices().filter((v) => v.lang.toLowerCase().startsWith("ru"))
     : [];
 }
 
-// Голоса Piper и эффекты «голос робота», которые предлагает сервер: { piper: [{ id, name }], effects: [...] }.
+// Голоса и эффекты «голос робота», которые предлагает сервер: { voices: [{ id, name, engine }], effects: [...] }.
 export async function serverVoices() {
   try {
     const res = await fetch("/api/voices");
     return await res.json();
   } catch {
-    return { piper: [], effects: [] };
+    return { voices: [], effects: [] };
   }
 }
 
@@ -116,7 +114,7 @@ function pickVoice() {
   );
 }
 
-// Один общий <audio> для голоса Piper. Обычный аудиоэлемент, а не Web Audio: на iPhone Web Audio
+// Один общий <audio> для голоса с сервера. Обычный аудиоэлемент, а не Web Audio: на iPhone Web Audio
 // молчит в беззвучном режиме. Safari пускает звук только после касания, поэтому при касании
 // элемент «разблокируется» беззвучным файлом и дальше может играть ответы.
 const player = new Audio();
@@ -141,21 +139,21 @@ let finish = null; // завершает текущую фразу
 let generation = 0; // растёт при каждой остановке: синтез, который не успел, не заговорит
 
 // Произносит текст. onLevel(0..1) — громкость речи для анимации,
-// onError(сообщение) — голос Piper не сработал и ТАРС перешёл на голос браузера.
+// onError(сообщение) — голос сервера не сработал и ТАРС перешёл на голос браузера.
 export async function speak(text, onLevel, onError) {
   stopSpeaking();
-  const voice = voiceSettings.voiceURI || DEFAULT_VOICE;
-  if (voice.startsWith("piper:")) {
+  const voice = voiceSettings.voiceURI;
+  if (!voice || /^(silero|piper):/.test(voice)) {
     try {
-      return await speakPiper(text, voice.slice("piper:".length), onLevel);
+      return await speakServer(text, voice, onLevel);
     } catch (err) {
-      onError?.(`Голос Piper: ${err.message}. Говорю голосом браузера.`);
+      onError?.(`Голос сервера: ${err.message}. Говорю голосом браузера.`);
     }
   }
   return speakBrowser(text, onLevel);
 }
 
-async function speakPiper(text, voice, onLevel) {
+async function speakServer(text, voice, onLevel) {
   const gen = generation;
   const res = await fetch("/api/tts", {
     method: "POST",

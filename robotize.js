@@ -37,7 +37,8 @@ export const EFFECTS = {
   none: { name: "Без эффекта" },
 };
 
-export function robotize(wav, effectId) {
+// options.pitch === false — не понижать тон (движок не умеет говорить быстрее, речь бы замедлилась).
+export function robotize(wav, effectId, options = {}) {
   const fx = EFFECTS[effectId];
   if (!fx || !(fx.pitch || fx.band || fx.drive || fx.comb || fx.ring || fx.crush)) return wav;
 
@@ -45,7 +46,7 @@ export function robotize(wav, effectId) {
   let signal = new Float32Array((end - start) >> 1);
   for (let i = 0; i < signal.length; i++) signal[i] = wav.readInt16LE(start + i * 2) / 32768;
 
-  if (fx.pitch) signal = stretch(signal, fx.pitch);
+  if (fx.pitch && options.pitch !== false) signal = stretch(signal, fx.pitch);
   if (fx.band) signal = band(signal, rate, fx.band);
   if (fx.drive) signal = drive(signal, fx.drive);
   if (fx.comb) signal = comb(signal, rate, fx.comb);

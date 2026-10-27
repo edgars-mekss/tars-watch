@@ -21,7 +21,7 @@ Apple Watch apps can only be built in Xcode on a Mac. So the design, animation, 
 - **Animated face.** Two glowing eyes drawn in SVG. They blink, glance around, widen while listening and scan side to side while thinking. Five voice bars react to your voice while the robot listens and pulse with its words while it speaks.
 - **Emotions.** The reply carries an emotion (neutral, alert, happy, confused, sad), shown through eyelid shapes and color.
 - **Voice in.** The browser records the phrase and detects its end after 1.2 s of silence. The server sends it to Whisper (`whisper-large-v3-turbo`) and gets the text back in about 0.7 s.
-- **Voice out.** A male Russian voice from [Piper](https://github.com/rhasspy/piper) (Dmitri, Denis or Ruslan), synthesized locally on the server in about 0.6 s. The voice bars follow the real loudness of the speech. A robot effect is applied on the server: a calm, lower "voice from a speaker inside a metal body" close to the film character (pitch shift, band-pass, light saturation), or flat intonation plus a metallic comb filter, ring modulation or a lo-fi "old computer" bitcrush (`robotize.js`). Without Piper it falls back to the browser's speech synthesis.
+- **Voice out.** A male Russian voice synthesized locally on the server: [Silero](https://github.com/snakers4/silero-models) Eugene by default (about 0.1 s per phrase, the model stays loaded in a worker process), with [Piper](https://github.com/rhasspy/piper) voices as a fallback. The voice bars follow the real loudness of the speech. A robot effect is applied on the server: a calm, lower "voice from a speaker inside a metal body" close to the film character (pitch shift, band-pass, light saturation), or flat intonation plus a metallic comb filter, ring modulation or a lo-fi "old computer" bitcrush (`robotize.js`). Without Piper it falls back to the browser's speech synthesis.
 - **Personality settings.** Humor, sarcasm and honesty (defaults 0 / 0 / 90%). They change by voice and persist through the conversation.
 - **Short, wrist-sized answers.** One or two sentences, plain spoken language, no made-up data: with no sensors or internet, the robot says it has no data instead of inventing the weather or your pulse.
 - **Debug panel.** Text input instead of voice, voice and pitch controls, and a preview of every animation state and emotion.
@@ -46,6 +46,7 @@ So one response drives the voice, the face and the settings display at once.
 |---|---|
 | `persona.js` | Character: system prompt, default settings, reply schema. Kept in one place so it moves to the watch app unchanged. |
 | `server.js` | Small Node.js server with no framework. Serves the prototype and proxies speech recognition and chat, so the API key never reaches the browser. |
+| `tts/silero_worker.py` | Silero worker process: loads the model once, one JSON line per phrase, numbers spelled out in words. |
 | `robotize.js` | Robot voice effects on the synthesized WAV: comb filter, ring modulation, bitcrush. |
 | `public/face.js` | The face: eyes, eyelids, emotions, blinking, voice bars. |
 | `public/voice.js` | Mic recording with silence detection, and speech playback with loudness metering. |
