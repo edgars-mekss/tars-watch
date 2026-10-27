@@ -1,0 +1,207 @@
+:root {
+  --page: #0b0d10;
+  --panel: #14181d;
+  --panel-line: #252b33;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #5ce1ff;
+  --case: linear-gradient(145deg, #3a3f45, #1c1f23 55%, #2b2f34);
+  --band: #1a1d21;
+  --scale: 1;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body { margin: 0; height: 100%; }
+
+body {
+  background: var(--page);
+  color: var(--text);
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 32px;
+  padding: 16px;
+}
+
+/* ---- Часы. Размеры в px экрана Series 5 44 мм (368×448), масштаб — через --scale ---- */
+
+.stage { flex: none; }
+
+.watch {
+  zoom: var(--scale);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.band {
+  width: 300px;
+  height: 120px;
+  background: var(--band);
+  box-shadow: inset 0 0 0 2px #23272c;
+}
+.band-top { border-radius: 40px 40px 0 0; mask: linear-gradient(to top, #000 60%, transparent); }
+.band-bottom { border-radius: 0 0 40px 40px; mask: linear-gradient(to bottom, #000 60%, transparent); }
+
+.case {
+  position: relative;
+  padding: 34px;
+  border-radius: 112px;
+  background: var(--case);
+  box-shadow: 0 30px 80px rgb(0 0 0 / 0.6), inset 0 2px 1px rgb(255 255 255 / 0.12);
+}
+
+.crown {
+  position: absolute;
+  right: -16px;
+  top: 128px;
+  width: 22px;
+  height: 66px;
+  border-radius: 6px;
+  background: repeating-linear-gradient(to bottom, #50565d 0 3px, #2c3035 3px 6px);
+  box-shadow: inset -2px 0 2px rgb(0 0 0 / 0.5);
+}
+.crown::after {
+  content: "";
+  position: absolute;
+  inset: 26px 2px 26px auto;
+  width: 6px;
+  border-radius: 3px;
+  background: #d33;
+}
+
+.side-button {
+  position: absolute;
+  right: -8px;
+  top: 250px;
+  width: 10px;
+  height: 90px;
+  border-radius: 4px;
+  background: #2c3035;
+}
+
+.screen {
+  position: relative;
+  width: 368px;
+  height: 448px;
+  border-radius: 78px;
+  background: #000;
+  overflow: hidden;
+  cursor: pointer;
+  outline: none;
+  box-shadow: 0 0 0 6px #050505;
+}
+.screen:focus-visible { box-shadow: 0 0 0 6px #050505, 0 0 0 10px var(--accent); }
+
+#face { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+.clock {
+  position: absolute;
+  top: 26px;
+  right: 46px;
+  font: 600 30px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+
+.subtitle {
+  position: absolute;
+  left: 40px;
+  right: 40px;
+  bottom: 30px;
+  min-height: 2.6em;
+  font: 500 22px/1.3 system-ui, -apple-system, "Segoe UI", sans-serif;
+  text-align: center;
+  color: #d8f7ff;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  transition: opacity 0.4s;
+}
+.subtitle.user { color: #8b949e; font-style: italic; }
+.subtitle.hidden, .subs-off .subtitle { opacity: 0; }
+
+.hint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 54px;
+  text-align: center;
+  font: 500 22px/1.2 system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: #6b7a85;
+  transition: opacity 0.4s;
+}
+.hint.hidden { opacity: 0; }
+
+/* Табло настройки: «ЮМОР 60%» поверх лица */
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgb(0 0 0 / 0.86);
+  color: var(--accent);
+  opacity: 0;
+  transition: opacity 0.25s;
+  pointer-events: none;
+}
+.overlay.show { opacity: 1; }
+.ov-label { font: 600 26px/1 system-ui, sans-serif; letter-spacing: 0.2em; }
+.ov-value { font: 700 96px/1 system-ui, sans-serif; font-variant-numeric: tabular-nums; text-shadow: 0 0 18px rgb(92 225 255 / 0.6); }
+.ov-bar { width: 220px; height: 10px; border-radius: 5px; background: #12303a; overflow: hidden; }
+.ov-bar i { display: block; height: 100%; background: var(--accent); box-shadow: 0 0 12px var(--accent); transition: width 0.6s; }
+
+/* ---- Пульт отладки ---- */
+
+.panel { width: 340px; max-height: calc(100vh - 32px); overflow: auto; }
+
+.panel details {
+  background: var(--panel);
+  border: 1px solid var(--panel-line);
+  border-radius: 12px;
+  padding: 12px 16px 16px;
+}
+.panel summary { cursor: pointer; font-weight: 600; }
+.panel section { margin-top: 16px; }
+.panel h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.panel label { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.panel label select, .panel label input[type="range"] { flex: 1; min-width: 0; }
+.panel output { width: 3em; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.row { display: flex; gap: 8px; margin-top: 12px; }
+.row input { flex: 1; min-width: 0; }
+
+input[type="text"], select, button {
+  font: inherit;
+  color: var(--text);
+  background: #0d1014;
+  border: 1px solid var(--panel-line);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+button { cursor: pointer; }
+button:hover { border-color: var(--accent); }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.chips button { padding: 3px 10px; font-size: 13px; }
+
+.settings { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; }
+.settings dt { color: var(--muted); }
+.settings dd { margin: 0; font-variant-numeric: tabular-nums; }
+
+.log { color: var(--muted); font-size: 12px; min-height: 1.4em; margin: 12px 0 0; white-space: pre-wrap; }
+.log.error { color: #ff7b72; }
+
+@media (max-width: 760px) {
+  body { flex-direction: column; justify-content: flex-start; height: auto; min-height: 100%; }
+  .panel { width: 100%; max-height: none; }
+}

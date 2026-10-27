@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0d10">
+  <title>TARS — прототип</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="stage" id="stage">
+    <div class="watch" id="watch">
+      <div class="band band-top"></div>
+      <div class="case">
+        <div class="crown"></div>
+        <div class="side-button"></div>
+        <div class="screen" id="screen" role="button" tabindex="0" aria-label="Экран часов: коснитесь, чтобы говорить">
+          <svg id="face" viewBox="0 0 184 224" aria-hidden="true"></svg>
+          <div class="clock" id="clock"></div>
+          <div class="overlay" id="overlay">
+            <div class="ov-label" id="ov-label"></div>
+            <div class="ov-value" id="ov-value"></div>
+            <div class="ov-bar"><i id="ov-fill"></i></div>
+          </div>
+          <div class="subtitle" id="subtitle"></div>
+          <div class="hint" id="hint">Коснитесь, чтобы включить</div>
+        </div>
+      </div>
+      <div class="band band-bottom"></div>
+    </div>
+  </main>
+
+  <aside class="panel">
+    <details id="panel" open>
+      <summary>Пульт отладки</summary>
+
+      <form class="row" id="text-form">
+        <input id="text-input" type="text" placeholder="Написать вместо голоса…" autocomplete="off">
+        <button type="submit">Отправить</button>
+      </form>
+
+      <section>
+        <h3>Настройки личности</h3>
+        <dl class="settings" id="settings"></dl>
+      </section>
+
+      <section>
+        <h3>Голос</h3>
+        <label>Голос <select id="voice-select"></select></label>
+        <label>Высота <input id="pitch" type="range" min="0.1" max="2" step="0.05"> <output id="pitch-out"></output></label>
+        <label>Скорость <input id="rate" type="range" min="0.5" max="1.6" step="0.05"> <output id="rate-out"></output></label>
+        <label class="check"><input id="subs" type="checkbox" checked> Субтитры на экране</label>
+      </section>
+
+      <section>
+        <h3>Просмотр анимаций</h3>
+        <div class="chips" id="states"></div>
+        <div class="chips" id="emotions"></div>
+      </section>
+
+      <div class="row">
+        <button id="reset" type="button">Выключить и сбросить разговор</button>
+      </div>
+      <p class="log" id="log"></p>
+    </details>
+  </aside>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
